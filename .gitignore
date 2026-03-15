@@ -1,0 +1,21 @@
+# Unedited workflow with real credentials
+n8n_ticket_automation_workflow_unedited.json
+
+# Scrub script (internal tool, not part of the project)
+scrub_workflow.py
+
+# Personal prep files
+loom_script_outline.*
+sample_slack_messages.md
+
+# Word doc duplicates
+*.docx
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.env
+*.key
