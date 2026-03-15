@@ -1,0 +1,387 @@
+{
+  "name": "Slack → AI Ticket Parser → Jira",
+  "nodes": [
+    {
+      "parameters": {
+        "trigger": [
+          "message"
+        ],
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_CHANNEL_ID",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "e53fd14e-79c2-494e-91b6-d137aa787095",
+      "name": "Slack Trigger",
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1104,
+        112
+      ],
+      "webhookId": "auto-generated",
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACKAPI_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Listens for new messages in #infra-issues channel. Replace YOUR_CHANNEL_ID with actual channel ID."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "filter-bot",
+              "leftValue": "={{ $json.bot_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notExists"
+              }
+            },
+            {
+              "id": "filter-subtype",
+              "leftValue": "={{ $json.subtype }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notExists"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "76cdceaa-6449-456e-819f-ba54a9539a49",
+      "name": "Filter Bot Messages",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        -880,
+        112
+      ],
+      "notes": "Blocks bot messages and message subtypes (edits, joins, etc.) to prevent infinite loops."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_CLAUDE_API_KEY"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 500,\n  \"system\": \"You are a ticket parsing engine for an IT infrastructure team. You receive plain-English messages from developers reporting issues. Your job is to extract structured fields and return valid JSON. Nothing else — no explanation, no markdown, no preamble.\\n\\nExtract these fields from the message:\\n\\n1. reporter: The person's full name. If not stated, return \\\"Unknown\\\".\\n2. affected_system: The specific system, server, or service affected. Use the exact name from the message. Known systems: BAT GIS Server, BAT VM, Production GIS Portal, Staging GIS Portal, Production GIS Server, Staging GIS Server.\\n3. environment: One of \\\"BAT\\\", \\\"Staging\\\", \\\"Production\\\", or \\\"Unknown\\\". Infer from context clues.\\n4. symptom_category: Classify into exactly one of: \\\"Authentication Failure\\\", \\\"Connectivity\\\", \\\"Service Outage\\\", \\\"Performance\\\", \\\"Data Issue\\\", \\\"Access/Permissions\\\", \\\"Other\\\".\\n5. severity: One of \\\"Critical\\\", \\\"High\\\", \\\"Medium\\\", \\\"Low\\\". Rules: Critical = Production completely down. High = System partially down or BAT/Staging fully down blocking development. Medium = Intermittent, workaround exists. Low = Cosmetic or informational.\\n6. summary: One clean sentence as a ticket title. No pronouns. Start with the system name.\\n7. raw_message: The original message text, preserved exactly.\\n\\nReturn ONLY valid JSON in this structure:\\n{\\n  \\\"reporter\\\": \\\"\\\",\\n  \\\"affected_system\\\": \\\"\\\",\\n  \\\"environment\\\": \\\"\\\",\\n  \\\"symptom_category\\\": \\\"\\\",\\n  \\\"severity\\\": \\\"\\\",\\n  \\\"summary\\\": \\\"\\\",\\n  \\\"raw_message\\\": \\\"\\\"\\n}\\n\\nIf the message is not a legitimate issue report, return:\\n{\\n  \\\"is_ticket\\\": false,\\n  \\\"reason\\\": \\\"Brief explanation\\\"\\n}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $json.text }}\"\n    }\n  ]\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "2d3f60e9-8c1b-47c5-827c-9fb90e119b75",
+      "name": "Claude API Parse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -656,
+        112
+      ],
+      "notes": "Sends Slack message text to Claude API. Returns structured JSON with ticket fields or is_ticket:false for non-issues. NOTE: Set up an 'anthropicApi' credential with your API key, or replace the header expression with your key directly."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Claude's response text and parse as JSON\nconst claudeResponse = $input.item.json;\nconst responseText = claudeResponse.content[0].text;\n\ntry {\n  // Strip markdown fences if Claude wrapped them\n  const cleaned = responseText\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n  \n  const parsed = JSON.parse(cleaned);\n  return { json: parsed };\n} catch (err) {\n  // If JSON parse fails, return error flag\n  return {\n    json: {\n      is_ticket: false,\n      reason: 'Claude response was not valid JSON: ' + err.message,\n      raw_response: responseText\n    }\n  };\n}"
+      },
+      "id": "8b861b69-d9ff-41b5-8e0e-d934f3a74601",
+      "name": "Parse JSON Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        112
+      ],
+      "notes": "Extracts text from Claude API response, strips markdown fences, parses as JSON. Graceful fallback if parsing fails."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Map Claude severity to Jira priority\nconst item = $input.item.json;\n\nconst severityToJiraPriority = {\n  'Critical': 'Highest',\n  'High': 'High',\n  'Medium': 'Medium',\n  'Low': 'Low'\n};\n\nconst severityToColor = {\n  'Critical': '#E24B4A',\n  'High': '#EF9F27',\n  'Medium': '#378ADD',\n  'Low': '#888780'\n};\n\n// Get the Slack message permalink for traceability\nconst channelId = $('Slack Trigger').item.json.channel;\nconst messageTs = $('Slack Trigger').item.json.ts;\nconst slackLink = `https://slack.com/archives/${channelId}/p${messageTs.replace('.', '')}`;\n\nreturn {\n  json: {\n    ...item,\n    jira_priority: severityToJiraPriority[item.severity] || 'Medium',\n    priority_color: severityToColor[item.severity] || '#888780',\n    slack_permalink: slackLink,\n    channel_id: channelId,\n    thread_ts: messageTs\n  }\n};"
+      },
+      "id": "9e090f5f-0396-4769-80f3-5906014e76ad",
+      "name": "Map Priority + Build Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "notes": "Translates Claude severity to Jira priority (Critical→Highest). Builds Slack permalink for Jira traceability field."
+    },
+    {
+      "parameters": {
+        "project": {
+          "__rl": true,
+          "value": "=10001",
+          "mode": ""
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "=10008",
+          "mode": ""
+        },
+        "summary": "={{ $json.summary }}",
+        "additionalFields": {
+          "description": "=*Reported by:* {{ $json.reporter }}\n*Environment:* {{ $json.environment }}\n*System:* {{ $json.affected_system }}\n*Category:* {{ $json.symptom_category }}\n\n---\n\n*Original message:*\n{{ $json.raw_message }}\n\n---\n_Slack thread:_ {{ $json.slack_permalink }}",
+          "labels": "={{ [$json.symptom_category.replace(/[\\s\\/]/g, '-')] }}",
+          "priority": {
+            "__rl": true,
+            "value": "={{ $json.jira_priority === 'Highest' ? '1' : $json.jira_priority === 'High' ? '2' : $json.jira_priority === 'Medium' ? '3' : '4' }}",
+            "mode": ""
+          }
+        }
+      },
+      "id": "f9e6f9fa-9984-44e1-af24-2b304d4671cd",
+      "name": "Jira Create Issue",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        224,
+        0
+      ],
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "YOUR_JIRASOFTWARECLOUDAPI_CREDENTIAL_ID",
+          "name": "Jira SW Cloud account"
+        }
+      },
+      "notes": "Creates a Jira Bug with all parsed fields. Replace YOUR_PROJECT_KEY with your Jira project key (e.g., INFRA). Custom fields (Reported By, Environment, Slack Thread) — see setup notes below."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the Slack Block Kit confirmation reply\nconst parsed = $('Map Priority + Build Metadata').item.json;\nconst jiraKey = $input.item.json.key;\nconst jiraDomain = 'https://YOUR_DOMAIN.atlassian.net/'; // REPLACE THIS\nconst jiraUrl = `https://${jiraDomain}/browse/${jiraKey}`;\n\nconst blocks = [\n  {\n    type: 'section',\n    text: {\n      type: 'mrkdwn',\n      text: ':white_check_mark: *Ticket created*'\n    }\n  },\n  {\n    type: 'section',\n    fields: [\n      { type: 'mrkdwn', text: `*Ticket:*\\n<${jiraUrl}|${jiraKey}>` },\n      { type: 'mrkdwn', text: `*Priority:*\\n${parsed.severity}` },\n      { type: 'mrkdwn', text: `*System:*\\n${parsed.affected_system}` },\n      { type: 'mrkdwn', text: `*Environment:*\\n${parsed.environment}` },\n      { type: 'mrkdwn', text: `*Category:*\\n${parsed.symptom_category}` },\n      { type: 'mrkdwn', text: `*Reporter:*\\n${parsed.reporter}` }\n    ]\n  },\n  {\n    type: 'section',\n    text: {\n      type: 'mrkdwn',\n      text: `*Summary:* ${parsed.summary}`\n    }\n  },\n  {\n    type: 'context',\n    elements: [\n      { type: 'mrkdwn', text: 'Something wrong? React with :x: to flag for review.' }\n    ]\n  }\n];\n\nreturn {\n  json: {\n    channel: parsed.channel_id,\n    thread_ts: parsed.thread_ts,\n    blocks: JSON.stringify(blocks),\n    color: parsed.priority_color,\n    text: `Ticket ${jiraKey} created: ${parsed.summary}`\n  }\n};"
+      },
+      "id": "614947a6-21fd-4d5c-a532-b71efe7a906d",
+      "name": "Build Slack Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "notes": "Assembles Slack Block Kit JSON for the threaded confirmation reply. REPLACE YOUR_DOMAIN with your Jira Cloud domain."
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $json.channel }}",
+          "mode": "id"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {
+          "thread_ts": {
+            "replyValues": {
+              "thread_ts": "={{ $json.thread_ts }}",
+              "reply_broadcast": true
+            }
+          }
+        }
+      },
+      "id": "58ee1cc0-ebd7-42b5-9dec-01c517fb4d54",
+      "name": "Slack Post Reply",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        0
+      ],
+      "webhookId": "auto-generated",
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACKAPI_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      },
+      "notes": "Posts the structured confirmation as a threaded reply under the developer's original message."
+    },
+    {
+      "parameters": {},
+      "id": "6b87a081-b858-4acd-b57b-a5912acb233e",
+      "name": "No Action (Not a Ticket)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        0,
+        224
+      ],
+      "notes": "Dead end for non-ticket messages (casual conversation, questions, etc.)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4c23bac3-a27f-4490-866c-31210a8b4f4a",
+              "leftValue": "={{ $json.reporter }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -240,
+        112
+      ],
+      "id": "6a44d65e-97e3-47b6-9ccd-be330dcdb59b",
+      "name": "If"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Slack Trigger": {
+      "main": [
+        [
+          {
+            "node": "Filter Bot Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Bot Messages": {
+      "main": [
+        [
+          {
+            "node": "Claude API Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude API Parse": {
+      "main": [
+        [
+          {
+            "node": "Parse JSON Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse JSON Response": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Priority + Build Metadata": {
+      "main": [
+        [
+          {
+            "node": "Jira Create Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jira Create Issue": {
+      "main": [
+        [
+          {
+            "node": "Build Slack Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Slack Reply": {
+      "main": [
+        [
+          {
+            "node": "Slack Post Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Map Priority + Build Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Action (Not a Ticket)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "YOUR_VERSION_ID",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "YOUR_INSTANCE_ID"
+  },
+  "id": "YOUR_WORKFLOW_ID",
+  "tags": []
+}
